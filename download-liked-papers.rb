@@ -7,6 +7,12 @@ require 'highline/import'
 require 'optparse'
 require 'fileutils'
 
+@proceedings_papers = nil # [title, id] pairs
+@proceedings_titles = nil # just the titles
+@confer_papers = nil      # JSON describing all papers in Confer
+@agent = nil              # web crawler
+@likes = nil              # Confer IDs of liked papers
+
 def download_paper(id, title, dir)
   filename = "#{dir}/#{title}.pdf"
   if File.exist?(filename)
