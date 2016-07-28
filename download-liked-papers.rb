@@ -7,12 +7,6 @@ require 'highline/import'
 require 'optparse'
 require 'fileutils'
 
-@proceedings_papers = nil # [title, id] pairs
-@proceedings_titles = nil # just the titles
-@confer_papers = nil      # JSON describing all papers in Confer
-@agent = nil              # web crawler
-@likes = nil              # Confer IDs of liked papers
-
 def download_paper(id, title, dir)
   filename = "#{dir}/#{title}.pdf"
   if File.exist?(filename)
@@ -34,9 +28,18 @@ def download_paper(id, title, dir)
   end
 end
 
+# Log in to confer and get titles of the liked papers
+def login(agent, user, password)
+  page = agent.get('http://confer.csail.mit.edu/login?redirect_url=/ijcai2016/papers')
+  page.form.login_email = user
+  page.form.login_password = password
+  page = page.form.submit
+  abort 'Login failed' unless page.search('div#error').empty?
+end
+
 # Read proceedings to get a list of all titles along with their IDs
 def read_proceedings
-  @proceedings_papers = []
+  proceedings_papers = []
   title = nil
 
   File.foreach(open('http://ijcai.org/proceedings/2016')) do |line|
@@ -47,51 +50,43 @@ def read_proceedings
       title = Nokogiri.HTML(title).xpath('//text()').to_s
     else
       id_match = /^<a href="\/Proceedings\/16\/Papers\/([0-9]+).pdf">.*/.match(line) or next
-      @proceedings_papers << [title, id_match[1].to_i]
+      proceedings_papers << [title, id_match[1].to_i]
       title = nil
     end
   end
 
-  @proceedings_titles = @proceedings_papers.transpose.first
+  proceedings_papers
 end
 
-# Log in to confer and get titles of the liked papers
-def login(user, password)
-  page = @agent.get('http://confer.csail.mit.edu/login?redirect_url=/ijcai2016/papers')
-  page.form.login_email = user
-  page.form.login_password = password
-  page = page.form.submit
-  abort 'Login failed' unless page.search('div#error').empty?
-end
-
-def read_likes
-  confer_data_json = @agent.get('http://confer.csail.mit.edu/data').body
-  @likes = JSON.parse(confer_data_json)['likes']
-end
-
-def read_confer_papers
-  confer_papers_json = @agent.get('http://confer.csail.mit.edu/static/conf/ijcai2016/data/papers.json').body
+def read_confer_papers(agent)
+  confer_papers_json = agent.get('http://confer.csail.mit.edu/static/conf/ijcai2016/data/papers.json').body
   confer_papers_json.slice!(0, 9) # remove "entities=" prefix
-  @confer_papers = JSON.parse(confer_papers_json)
+  JSON.parse(confer_papers_json)
 end
 
-def download_liked_papers(dir)
-  @likes.each do |id|
-    paper = @confer_papers[id]
+def read_likes(agent)
+  confer_data_json = agent.get('http://confer.csail.mit.edu/data').body
+  JSON.parse(confer_data_json)['likes']
+end
+
+def download_liked_papers(likes, confer_papers, proceedings_papers, dir)
+  proceedings_titles = proceedings_papers.transpose.first
+  likes.each do |id|
+    paper = confer_papers[id]
     #next if paper['type'] != 'paper'
     next if paper['abstract'].empty?
     confer_title = paper['title']
-    scores = Amatch::LongestSubsequence.new(confer_title).match(@proceedings_titles)
+    scores = Amatch::LongestSubsequence.new(confer_title).match(proceedings_titles)
     # XXX amatch reports the bytesize (not the length) of the longest common subsequence
     scores.map! {|score| score.to_f / confer_title.bytesize}
-    closest_paper = @proceedings_papers[scores.each_with_index.max[1]]
+    closest_paper = proceedings_papers[scores.each_with_index.max[1]]
     warn "Best match for '#{confer_title}' is not very close." if scores.max < 0.6
     two_best_scores = scores.each_with_index.max(2)
     distance_to_second_best = two_best_scores[0][0] - two_best_scores[1][0]
     if distance_to_second_best < 0.1
       warn "No clearly best matching paper title for '#{confer_title}':"
-      warn "1. #{@proceedings_titles[two_best_scores[0][1]]}"
-      warn "2. #{@proceedings_titles[two_best_scores[1][1]]}"
+      warn "1. #{proceedings_titles[two_best_scores[0][1]]}"
+      warn "2. #{proceedings_titles[two_best_scores[1][1]]}"
       warn 'Choosing the first one.'
     end
     download_paper(closest_paper[1], closest_paper[0], dir)
@@ -128,10 +123,11 @@ ARGV.empty? or abort optparse.to_s
 user = ask('User: ') if user.nil?
 password = ask('Password: ') {|q| q.echo = false} if password.nil?
 
-read_proceedings
-@agent = Mechanize.new
-@agent.user_agent_alias = 'Linux Firefox'
-login(user, password)
-read_likes
-read_confer_papers
-download_liked_papers(directory)
+agent = Mechanize.new
+agent.user_agent_alias = 'Linux Firefox'
+
+proceedings_papers = read_proceedings
+login(agent, user, password)
+likes = read_likes(agent)
+confer_papers = read_confer_papers(agent)
+download_liked_papers(likes, confer_papers, proceedings_papers, directory)
