@@ -77,13 +77,13 @@ def download_liked_papers(dir)
     confer_title = paper['title']
     scores = Amatch::LongestSubsequence.new(confer_title).match(@proceedings_titles)
     # XXX amatch reports the bytesize (not the length) of the longest common subsequence
-    scores = scores.each_with_index.map {|score, i| score.to_f / confer_title.bytesize}
+    scores.map! {|score| score.to_f / confer_title.bytesize}
     closest_paper = @proceedings_papers[scores.each_with_index.max[1]]
     warn "Best match for '#{confer_title}' is not very close." if scores.max < 0.6
     two_best_scores = scores.each_with_index.max(2)
     distance_to_second_best = two_best_scores[0][0] - two_best_scores[1][0]
     if distance_to_second_best < 0.1
-      warn "Multiple papers match '#{confer_title}' with similar score:"
+      warn "No clearly best matching paper title for '#{confer_title}':"
       warn "1. #{@proceedings_titles[two_best_scores[0][1]]}"
       warn "2. #{@proceedings_titles[two_best_scores[1][1]]}"
       warn 'Choosing the first one.'
@@ -118,7 +118,6 @@ optparse = OptionParser.new do |opts|
 end
 
 optparse.parse!
-
 ARGV.empty? or abort optparse.to_s
 user = ask('User: ') if user.nil?
 password = ask('Password: ') {|q| q.echo = false} if password.nil?
